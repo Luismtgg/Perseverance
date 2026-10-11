@@ -16,9 +16,21 @@
         pointer-events: none;
         background: radial-gradient(ellipse at center, transparent 55%, rgba(20, 8, 2, 0.4) 100%);
       }
+      #ayuda {
+        position: fixed;
+        left: 16px;
+        bottom: 14px;
+        z-index: 1;
+        pointer-events: none;
+        font: 12px/1.4 system-ui, sans-serif;
+        letter-spacing: 0.04em;
+        color: rgba(255, 236, 214, 0.75);
+        text-shadow: 0 1px 2px rgba(20, 8, 2, 0.8);
+      }
     </style>
   </head>
   <body>
+    <div id="ayuda">W A S D — conducir · arrastrar — mirar alrededor · rueda — acercar</div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

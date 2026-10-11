@@ -5,6 +5,7 @@ import { conAtmosfera } from './cielo.js';
 const RADIO = 900;
 const SEGMENTOS = 512;
 const BALDOSA = 10; // metros que cubre una repetición del mapa de ondas
+const DENSO = 0.12; // cuánto se aprieta la rejilla en el centro (1 = uniforme)
 
 // Dirección del viento (unitaria, en XZ). Las crestas quedan perpendiculares a él
 // y casi de frente al sol, que las ilumina a contraluz.
@@ -54,6 +55,73 @@ export function muestra(x, z) {
 }
 
 export const altura = (x, z) => muestra(x, z).y;
+
+// Rejilla más densa en el centro, donde está la cámara
+const coordenada = (i) => {
+  const u = (i / SEGMENTOS) * 2 - 1;
+  return RADIO * u * (DENSO + (1 - DENSO) * Math.abs(u));
+};
+
+// Vértices de la malla, calculados una sola vez
+let _rejilla = null;
+function rejilla() {
+  if (_rejilla) return _rejilla;
+  const n = SEGMENTOS + 1;
+  const ejes = new Float32Array(n);
+  for (let i = 0; i < n; i++) ejes[i] = coordenada(i);
+  const alturas = new Float32Array(n * n);
+  const dunas = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const m = muestra(ejes[i], ejes[j]);
+      alturas[j * n + i] = m.y;
+      dunas[j * n + i] = m.duna;
+    }
+  }
+  _rejilla = { n, ejes, alturas, dunas };
+  return _rejilla;
+}
+
+// Columna (o fila) de la rejilla que contiene la coordenada v: inversa de coordenada()
+function celda(v, ejes) {
+  const a = (-DENSO + Math.sqrt(DENSO * DENSO + (4 * (1 - DENSO) * Math.abs(v)) / RADIO)) / (2 * (1 - DENSO));
+  let i = Math.floor(((Math.sign(v) * a + 1) / 2) * SEGMENTOS);
+  i = Math.min(SEGMENTOS - 1, Math.max(0, i));
+  // El redondeo puede dejarnos en la celda de al lado
+  if (i > 0 && v < ejes[i]) i--;
+  else if (i < SEGMENTOS - 1 && v >= ejes[i + 1]) i++;
+  return i;
+}
+
+// Altura de la malla dibujada en (x, z): interpola el triángulo que hay bajo el punto.
+// Entre vértices difiere de altura(), que tiene más detalle del que la rejilla resuelve;
+// lo que deba tocar el suelo visible (ruedas, huellas) tiene que usar esta.
+export function alturaMalla(x, z) {
+  const { n, ejes, alturas } = rejilla();
+  const i = celda(x, ejes);
+  const j = celda(z, ejes);
+  const fx = Math.min(1, Math.max(0, (x - ejes[i]) / (ejes[i + 1] - ejes[i])));
+  const fz = Math.min(1, Math.max(0, (z - ejes[j]) / (ejes[j + 1] - ejes[j])));
+  const a = alturas[j * n + i];
+  const b = alturas[j * n + i + 1];
+  const c = alturas[(j + 1) * n + i];
+  const d = alturas[(j + 1) * n + i + 1];
+  // Misma diagonal (b–c) que los triángulos de crearTerreno()
+  return fx + fz <= 1 ? a + fx * (b - a) + fz * (c - a) : d + (1 - fx) * (c - d) + (1 - fz) * (b - d);
+}
+
+// Color de la arena en (x, z): óxido y ocre en manchas, arena clara en las dunas,
+// suelo más oscuro y pedregoso entre ellas. Escribe en `destino` y lo devuelve.
+const OXIDO = new THREE.Color(0x9a6444);
+const OCRE = new THREE.Color(0xb5895a);
+const ARENA = new THREE.Color(0xcfa274);
+const OSCURO = new THREE.Color(0x6b4a3a);
+export function colorTerreno(x, z, duna, destino) {
+  const enDuna = suave(0.15, 2.5, duna);
+  destino.copy(OXIDO).lerp(OCRE, suave(-0.35, 0.4, fbm2(x * 0.013 + 5, z * 0.013 - 2, 3)));
+  destino.lerp(OSCURO, (1 - enDuna) * suave(0.0, 0.5, fbm2(x * 0.07 - 11, z * 0.07 + 4, 3)) * 0.6);
+  return destino.lerp(ARENA, enDuna * 0.75);
+}
 
 // Mapa de normales repetible con ondas de arena (megaondas de ~1.3 m) y grano fino
 function crearMapaOndas() {
@@ -107,29 +175,20 @@ function crearMapaOndas() {
 }
 
 export function crearTerreno() {
-  const n = SEGMENTOS + 1;
+  const { n, ejes, alturas, dunas } = rejilla();
   const posiciones = new Float32Array(n * n * 3);
   const uvs = new Float32Array(n * n * 2);
-  const dunas = new Float32Array(n * n);
-
-  // Rejilla más densa en el centro, donde está la cámara
-  const coordenada = (i) => {
-    const u = (i / SEGMENTOS) * 2 - 1;
-    return RADIO * u * (0.12 + 0.88 * Math.abs(u));
-  };
 
   for (let j = 0; j < n; j++) {
-    const z = coordenada(j);
+    const z = ejes[j];
     for (let i = 0; i < n; i++) {
-      const x = coordenada(i);
+      const x = ejes[i];
       const k = j * n + i;
-      const m = muestra(x, z);
       posiciones[k * 3] = x;
-      posiciones[k * 3 + 1] = m.y;
+      posiciones[k * 3 + 1] = alturas[k];
       posiciones[k * 3 + 2] = z;
       uvs[k * 2] = x / BALDOSA;
       uvs[k * 2 + 1] = z / BALDOSA;
-      dunas[k] = m.duna;
     }
   }
 
@@ -152,21 +211,10 @@ export function crearTerreno() {
   geo.setIndex(new THREE.BufferAttribute(indices, 1));
   geo.computeVertexNormals();
 
-  // Color por vértice: óxido y ocre en manchas, arena clara en las dunas,
-  // suelo más oscuro y pedregoso entre ellas
-  const oxido = new THREE.Color(0x9a6444);
-  const ocre = new THREE.Color(0xb5895a);
-  const arena = new THREE.Color(0xcfa274);
-  const oscuro = new THREE.Color(0x6b4a3a);
   const c = new THREE.Color();
   const colores = new Float32Array(n * n * 3);
   for (let k = 0; k < n * n; k++) {
-    const x = posiciones[k * 3];
-    const z = posiciones[k * 3 + 2];
-    const enDuna = suave(0.15, 2.5, dunas[k]);
-    c.copy(oxido).lerp(ocre, suave(-0.35, 0.4, fbm2(x * 0.013 + 5, z * 0.013 - 2, 3)));
-    c.lerp(oscuro, (1 - enDuna) * suave(0.0, 0.5, fbm2(x * 0.07 - 11, z * 0.07 + 4, 3)) * 0.6);
-    c.lerp(arena, enDuna * 0.75);
+    colorTerreno(posiciones[k * 3], posiciones[k * 3 + 2], dunas[k], c);
     colores[k * 3] = c.r;
     colores[k * 3 + 1] = c.g;
     colores[k * 3 + 2] = c.b;

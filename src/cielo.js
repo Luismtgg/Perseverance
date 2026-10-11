@@ -60,8 +60,9 @@ export const GLSL_ATMOSFERA = /* glsl */ `
     col = mix(col, cenit, smoothstep(0.12, 0.85, h));
     // El polvo dispersa la luz hacia delante: resplandor ancho y cálido
     col += vec3(1.0, 0.62, 0.30) * (pow(s, 5.0) * 0.30 + pow(s, 24.0) * 0.35);
-    // Halo frío pegado al disco, como en los atardeceres marcianos
-    col += vec3(0.75, 0.85, 1.0) * pow(s, 220.0) * 0.9;
+    // Halo azulado pegado al disco, como en los atardeceres marcianos: el polvo fino
+    // dispersa el azul hacia delante, así que sustituye al tono cálido en vez de sumarse
+    col = mix(col, vec3(0.76, 0.98, 1.38), pow(s, 160.0) * 0.75);
     return col;
   }
 
@@ -91,9 +92,27 @@ export function crearCielo() {
       fragmentShader: /* glsl */ `
         ${GLSL_ATMOSFERA}
         varying vec3 vDir;
+
+        // Unas pocas estrellas tenues en lo alto, donde hay menos polvo que atravesar.
+        // Proyección estereográfica (conforme): las estrellas quedan redondas.
+        float estrellas(vec3 d) {
+          vec2 uv = d.xz / (1.0 + max(d.y, 0.0)) * 34.0;
+          // Radio en píxeles, no en ángulo: un punto nítido a cualquier resolución
+          float radio = 1.5 * length(fwidth(uv)) * 0.7071;
+          vec2 celda = floor(uv);
+          float azar = hash31(vec3(celda, 3.7));
+          if (azar < 0.94) return 0.0;
+          vec2 centro = celda + 0.25 + 0.5 * vec2(hash31(vec3(celda, 11.0)), hash31(vec3(celda, 23.0)));
+          float brillo = 0.35 + 0.65 * (azar - 0.94) / 0.06;
+          float alto = smoothstep(0.18, 0.45, d.y);
+          float lejosDelSol = smoothstep(0.93, 0.6, dot(d, uSol));
+          return smoothstep(radio, radio * 0.3, length(uv - centro)) * brillo * alto * lejosDelSol;
+        }
+
         void main() {
           vec3 d = normalize(vDir);
           vec3 col = cieloSinSol(d);
+          col += vec3(1.0, 0.95, 0.88) * estrellas(d) * 0.3;
           // Disco solar (~1.1° de radio)
           col += vec3(1.0, 0.93, 0.82) * smoothstep(0.99978, 0.99984, dot(d, uSol)) * 30.0;
           gl_FragColor = vec4(col, 1.0);
